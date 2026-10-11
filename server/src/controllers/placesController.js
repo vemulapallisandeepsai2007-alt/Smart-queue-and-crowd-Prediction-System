@@ -341,9 +341,87 @@ const geocodeSearchLocation = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/places/ip-location
+ * Estimates location based on client public IP or server public IP fallback when browser GPS is unavailable
+ */
+const getIpLocation = async (req, res) => {
+  try {
+    let clientIp =
+      req.headers['x-forwarded-for'] ||
+      req.headers['x-real-ip'] ||
+      req.socket.remoteAddress ||
+      '';
+
+    if (clientIp.includes(',')) {
+      clientIp = clientIp.split(',')[0].trim();
+    }
+    if (clientIp.startsWith('::ffff:')) {
+      clientIp = clientIp.replace('::ffff:', '');
+    }
+
+    const isPrivate =
+      !clientIp ||
+      clientIp === '127.0.0.1' ||
+      clientIp === '::1' ||
+      clientIp.startsWith('10.') ||
+      clientIp.startsWith('192.168.') ||
+      clientIp.startsWith('172.16.');
+
+    const targetUrl = isPrivate
+      ? 'http://ip-api.com/json'
+      : `http://ip-api.com/json/${encodeURIComponent(clientIp)}`;
+
+    const response = await fetch(targetUrl, { signal: AbortSignal.timeout(4000) });
+    if (response.ok) {
+      const data = await response.json();
+      if (data && data.status === 'success' && data.lat && data.lon) {
+        return res.json({
+          success: true,
+          lat: data.lat,
+          lng: data.lon,
+          city: data.city || 'Guntur',
+          region: data.regionName || 'Andhra Pradesh',
+          country: data.country || 'India',
+          source: `Network: ${data.city || 'Your Area'}${data.regionName ? ', ' + data.regionName : ''}`,
+          locality: data.city || 'Your Area',
+          isIpFallback: true,
+        });
+      }
+    }
+
+    // Default fallback to Guntur if IP lookup service returned error
+    return res.json({
+      success: true,
+      lat: 16.3067,
+      lng: 80.4365,
+      city: 'Guntur',
+      region: 'Andhra Pradesh',
+      country: 'India',
+      source: 'Default Area (Guntur)',
+      locality: 'Guntur',
+      isIpFallback: true,
+    });
+  } catch (error) {
+    console.warn('[IP Location] Fallback notice:', error.message);
+    return res.json({
+      success: true,
+      lat: 16.3067,
+      lng: 80.4365,
+      city: 'Guntur',
+      region: 'Andhra Pradesh',
+      country: 'India',
+      source: 'Default Area (Guntur)',
+      locality: 'Guntur',
+      isIpFallback: true,
+    });
+  }
+};
+
 module.exports = {
   getNearbyPlaces,
   getPlaceDepartments,
   reverseGeocodeLocation,
   geocodeSearchLocation,
+  getIpLocation,
 };

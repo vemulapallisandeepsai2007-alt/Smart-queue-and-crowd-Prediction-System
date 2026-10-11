@@ -26,8 +26,10 @@ import {
   LocateFixed,
   Shield,
   User,
+  Globe,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { detectUserLocation, QUICK_CITIES } from '../services/locationService';
 
 const StaffAuthPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -115,35 +117,54 @@ const StaffAuthPage = () => {
     }
   }, []);
 
-  // HTML5 Browser Geolocation
-  const handleGetLocation = useCallback(() => {
-    if (!navigator.geolocation) {
-      toast.error('Geolocation is not supported by your browser.');
-      return;
-    }
-
+  // Smart Multi-Tier Location Detection (GPS -> Wi-Fi -> IP/Network -> Default)
+  const handleGetLocation = useCallback(async () => {
     setLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        setLocating(false);
-        const { latitude, longitude } = pos.coords;
+    try {
+      const result = await detectUserLocation();
+      setLocating(false);
+
+      if (result.success) {
         setCoordinates({
-          lat: latitude,
-          lng: longitude,
-          source: 'Live GPS Location',
-          locality: 'Your GPS Location',
+          lat: result.lat,
+          lng: result.lng,
+          source: result.source,
+          locality: result.locality || result.city || 'Your Location',
         });
-        toast.success('Live GPS coordinates acquired!');
-        await updateLocalityName(latitude, longitude, true);
-      },
-      (err) => {
-        setLocating(false);
-        console.warn('Geolocation error:', err);
-        toast.error('Location access denied or unavailable. You can search city/area below.');
-      },
-      { enableHighAccuracy: true, timeout: 9000, maximumAge: 30000 }
-    );
+        toast.success(result.message || 'Location coordinates acquired!');
+        if (result.type === 'gps') {
+          await updateLocalityName(result.lat, result.lng, true);
+        } else {
+          await updateLocalityName(result.lat, result.lng, false);
+        }
+      } else {
+        setCoordinates({
+          lat: result.lat,
+          lng: result.lng,
+          source: result.source,
+          locality: result.locality,
+        });
+        toast(
+          'GPS hardware unavailable. Centered on Guntur (Default). You can search your city below or select a quick city.',
+          { icon: 'ℹ️' }
+        );
+      }
+    } catch (err) {
+      setLocating(false);
+      console.warn('Geolocation fallback notice:', err);
+      toast.error('Location could not be determined. You can search city/area below.');
+    }
   }, [updateLocalityName]);
+
+  const handleQuickCitySelect = (city) => {
+    setCoordinates({
+      lat: city.lat,
+      lng: city.lng,
+      source: `${city.name}, ${city.state}`,
+      locality: city.name,
+    });
+    toast.success(`Centered on ${city.name}! Loading nearby facilities...`);
+  };
 
   // Fetch nearby places using /api/places/nearby
   const fetchNearbyPlaces = useCallback(async (cat, lat, lng, rad) => {
@@ -721,6 +742,28 @@ const StaffAuthPage = () => {
                         {searchingArea ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <span>Search Area</span>}
                       </button>
                     </form>
+
+                    {/* Quick City Selector Chips */}
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1 text-xs">
+                      <span className="text-slate-500 font-semibold mr-1 flex items-center gap-1">
+                        <Compass className="w-3.5 h-3.5 text-[#8164AD]" />
+                        Quick Cities:
+                      </span>
+                      {QUICK_CITIES.map((c) => (
+                        <button
+                          key={c.name}
+                          type="button"
+                          onClick={() => handleQuickCitySelect(c)}
+                          className={`px-2 py-0.5 rounded-lg border text-[11px] font-medium transition-all ${
+                            coordinates.locality?.toLowerCase() === c.name.toLowerCase()
+                              ? 'bg-[#8164AD] text-white border-[#8164AD]'
+                              : 'bg-white hover:bg-[#F3ECFB] text-slate-700 border-[#D5C3EE]'
+                          }`}
+                        >
+                          {c.name}
+                        </button>
+                      ))}
+                    </div>
 
                     {/* Radius Selector: 5 / 10 / 20 km */}
                     <div className="flex items-center justify-between pt-2 text-xs">

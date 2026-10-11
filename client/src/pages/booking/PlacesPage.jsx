@@ -18,8 +18,10 @@ import {
   ExternalLink,
   ShieldCheck,
   LocateFixed,
+  Globe,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { detectUserLocation, QUICK_CITIES } from '../../services/locationService';
 
 const PlacesPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -34,6 +36,7 @@ const PlacesPage = () => {
   const [loading, setLoading] = useState(true);
   const [locating, setLocating] = useState(false);
   const [isGpsActive, setIsGpsActive] = useState(false);
+  const [locationType, setLocationType] = useState('default'); // 'gps' | 'network' | 'search' | 'default'
   const [coordinates, setCoordinates] = useState({
     lat: 16.3067,
     lng: 80.4365,
@@ -84,38 +87,73 @@ const PlacesPage = () => {
     }
   }, []);
 
-  // HTML5 Browser Geolocation with high accuracy
-  const handleGetLocation = useCallback((isAuto = false) => {
-    if (!navigator.geolocation) {
-      if (!isAuto) toast.error('Geolocation is not supported by your browser.');
-      return;
-    }
+  // Smart Multi-Tier Location Detection (GPS -> Wi-Fi -> IP/Network -> Default)
+  const handleGetLocation = useCallback(
+    async (isAuto = false) => {
+      setLocating(true);
+      try {
+        const result = await detectUserLocation();
+        setLocating(false);
 
-    setLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        setLocating(false);
-        const { latitude, longitude } = pos.coords;
-        setIsGpsActive(true);
-        setCoordinates({
-          lat: latitude,
-          lng: longitude,
-          source: 'GPS: Acquiring address...',
-          locality: 'Your GPS Location',
-        });
-        toast.success('Live GPS location detected!');
-        await updateLocalityName(latitude, longitude, true);
-      },
-      (err) => {
-        setLocating(false);
-        if (!isAuto) {
-          console.warn('Geolocation error:', err);
-          toast.error('Location access denied or unavailable. You can search any city above.');
+        if (result.success) {
+          setIsGpsActive(result.type === 'gps');
+          setLocationType(result.type);
+          setCoordinates({
+            lat: result.lat,
+            lng: result.lng,
+            source: result.source,
+            locality: result.locality || result.city || 'Detected Location',
+          });
+
+          if (result.type === 'gps') {
+            toast.success(result.message || 'Live GPS location detected!');
+            await updateLocalityName(result.lat, result.lng, true);
+          } else if (result.type === 'network') {
+            if (!isAuto) {
+              toast.success(
+                result.message || `Detected location via Network: ${result.city || 'Your Area'}`
+              );
+            }
+            await updateLocalityName(result.lat, result.lng, false);
+          }
+        } else {
+          setIsGpsActive(false);
+          setLocationType('default');
+          setCoordinates({
+            lat: result.lat,
+            lng: result.lng,
+            source: result.source,
+            locality: result.locality,
+          });
+          if (!isAuto) {
+            toast(
+              'GPS sensor unavailable on device. Showing Guntur facilities. You can select a quick city below or search any city above.',
+              { icon: 'ℹ️', duration: 4000 }
+            );
+          }
         }
-      },
-      { enableHighAccuracy: true, timeout: 9000, maximumAge: 30000 }
-    );
-  }, [updateLocalityName]);
+      } catch (err) {
+        setLocating(false);
+        console.warn('Location detection fallback notice:', err);
+        if (!isAuto) {
+          toast.error('Could not detect location. Please search your city or choose below.');
+        }
+      }
+    },
+    [updateLocalityName]
+  );
+
+  const handleQuickCitySelect = (city) => {
+    setIsGpsActive(false);
+    setLocationType('search');
+    setCoordinates({
+      lat: city.lat,
+      lng: city.lng,
+      source: `${city.name}, ${city.state}`,
+      locality: city.name,
+    });
+    toast.success(`Centered on ${city.name}! Loading nearby ${category.toLowerCase()}s...`);
+  };
 
   // Request location on first load automatically
   useEffect(() => {
@@ -151,6 +189,7 @@ const PlacesPage = () => {
       if (res.data?.success && res.data.location) {
         const loc = res.data.location;
         setIsGpsActive(false);
+        setLocationType('search');
         setCoordinates({
           lat: loc.lat,
           lng: loc.lng,
@@ -169,6 +208,8 @@ const PlacesPage = () => {
           p.address.toLowerCase().includes(query.toLowerCase())
       );
       if (filtered.length > 0) {
+        setIsGpsActive(false);
+        setLocationType('search');
         setPlaces(filtered);
         toast.success(`Found ${filtered.length} facilities matching "${query}"`);
       } else {
@@ -241,66 +282,116 @@ const PlacesPage = () => {
         </div>
 
         {/* Location & Radius Control Bar */}
-        <div className="bg-white/85 backdrop-blur-md rounded-2xl p-4 sm:p-5 border border-[#D5C3EE]/90 shadow-xs flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
-          {/* Geolocation Button */}
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={() => handleGetLocation(false)}
-              disabled={locating}
-              id="geolocation-btn"
-              className={`inline-flex items-center space-x-2 px-4 py-2.5 rounded-xl text-white text-xs font-semibold shadow-xs transition-all disabled:opacity-50 ${
-                isGpsActive ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-[#8164AD] hover:bg-[#6A4C97]'
-              }`}
-            >
-              {locating ? (
-                <Loader2 className="w-4 h-4 animate-spin text-white" />
-              ) : (
-                <Navigation className="w-4 h-4 text-white" />
-              )}
-              <span>{locating ? 'Acquiring GPS...' : isGpsActive ? 'Re-Detect GPS Location' : 'Use My GPS Location'}</span>
-            </button>
+        <div className="bg-white/85 backdrop-blur-md rounded-2xl p-4 sm:p-5 border border-[#D5C3EE]/90 shadow-xs space-y-3">
+          <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4">
+            {/* Geolocation Button */}
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => handleGetLocation(false)}
+                disabled={locating}
+                id="geolocation-btn"
+                className={`inline-flex items-center space-x-2 px-4 py-2.5 rounded-xl text-white text-xs font-semibold shadow-xs transition-all disabled:opacity-50 ${
+                  locationType === 'gps'
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : locationType === 'network'
+                    ? 'bg-indigo-600 hover:bg-indigo-700'
+                    : 'bg-[#8164AD] hover:bg-[#6A4C97]'
+                }`}
+              >
+                {locating ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-white" />
+                ) : locationType === 'gps' ? (
+                  <Navigation className="w-4 h-4 text-white" />
+                ) : locationType === 'network' ? (
+                  <Globe className="w-4 h-4 text-white" />
+                ) : (
+                  <LocateFixed className="w-4 h-4 text-white" />
+                )}
+                <span>
+                  {locating
+                    ? 'Detecting Location...'
+                    : locationType === 'gps'
+                    ? 'Live GPS Active'
+                    : locationType === 'network'
+                    ? 'Network Location Active'
+                    : 'Detect My Location'}
+                </span>
+              </button>
 
-            <div className="text-xs text-slate-700 flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-[#FAF7FD] border border-[#D5C3EE]">
-              <MapPin className="w-3.5 h-3.5 text-[#8164AD] shrink-0" />
-              <span className="font-semibold text-slate-800 truncate max-w-[220px]">{coordinates.source}</span>
+              <div className="text-xs text-slate-700 flex items-center space-x-2 px-3 py-2 rounded-xl bg-[#FAF7FD] border border-[#D5C3EE]">
+                <MapPin className="w-3.5 h-3.5 text-[#8164AD] shrink-0" />
+                <span className="font-semibold text-slate-800 truncate max-w-[220px]">{coordinates.source}</span>
+                {locationType === 'gps' && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                    GPS
+                  </span>
+                )}
+                {locationType === 'network' && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800">
+                    Network
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Area Search Input & Radius Selector */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+              {/* Search Input */}
+              <form onSubmit={handleAreaSearch} className="relative flex-1 sm:w-64">
+                {searchingArea ? (
+                  <Loader2 className="w-4 h-4 text-[#8164AD] animate-spin absolute left-3 top-1/2 -translate-y-1/2" />
+                ) : (
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                )}
+                <input
+                  type="text"
+                  placeholder="Search any city or area..."
+                  value={searchArea}
+                  onChange={(e) => setSearchArea(e.target.value)}
+                  className="w-full glass-input rounded-xl pl-9 pr-3 py-2 text-xs text-slate-900 placeholder-slate-400 focus:outline-none bg-white border border-[#D5C3EE]"
+                />
+              </form>
+
+              {/* Radius Selector Pills */}
+              <div className="flex items-center space-x-1 p-1 bg-[#FAF7FD] rounded-xl border border-[#D5C3EE] self-center">
+                <span className="text-[11px] text-slate-600 px-2 font-medium">Radius:</span>
+                {[5, 10, 20, 30].map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => setRadius(r)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                      radius === r
+                        ? 'bg-[#8164AD] text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {r} km
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
-          {/* Area Search Input & Radius Selector */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            {/* Search Input */}
-            <form onSubmit={handleAreaSearch} className="relative flex-1 sm:w-64">
-              {searchingArea ? (
-                <Loader2 className="w-4 h-4 text-[#8164AD] animate-spin absolute left-3 top-1/2 -translate-y-1/2" />
-              ) : (
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              )}
-              <input
-                type="text"
-                placeholder="Search any city or area..."
-                value={searchArea}
-                onChange={(e) => setSearchArea(e.target.value)}
-                className="w-full glass-input rounded-xl pl-9 pr-3 py-2 text-xs text-slate-900 placeholder-slate-400 focus:outline-none bg-white border border-[#D5C3EE]"
-              />
-            </form>
-
-            {/* Radius Selector Pills */}
-            <div className="flex items-center space-x-1 p-1 bg-[#FAF7FD] rounded-xl border border-[#D5C3EE] self-center">
-              <span className="text-[11px] text-slate-600 px-2 font-medium">Radius:</span>
-              {[5, 10, 20, 30].map((r) => (
-                <button
-                  key={r}
-                  onClick={() => setRadius(r)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
-                    radius === r
-                      ? 'bg-[#8164AD] text-white shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  {r} km
-                </button>
-              ))}
-            </div>
+          {/* Quick City Selector Chips */}
+          <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-[#E6DAF6] text-xs">
+            <span className="text-slate-500 font-semibold mr-1 flex items-center gap-1">
+              <Compass className="w-3.5 h-3.5 text-[#8164AD]" />
+              Quick Cities:
+            </span>
+            {QUICK_CITIES.map((c) => (
+              <button
+                key={c.name}
+                type="button"
+                onClick={() => handleQuickCitySelect(c)}
+                className={`px-2.5 py-1 rounded-lg border text-xs font-medium transition-all ${
+                  coordinates.locality?.toLowerCase() === c.name.toLowerCase()
+                    ? 'bg-[#8164AD] text-white border-[#8164AD] shadow-xs'
+                    : 'bg-white hover:bg-[#FAF7FD] text-slate-700 border-[#D5C3EE] hover:border-[#B19BD6]'
+                }`}
+              >
+                {c.name}
+              </button>
+            ))}
           </div>
         </div>
 

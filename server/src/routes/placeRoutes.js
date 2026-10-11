@@ -4,12 +4,16 @@ const {
   getPlaceDepartments,
   reverseGeocodeLocation,
   geocodeSearchLocation,
+  getIpLocation,
 } = require('../controllers/placesController');
 
 const router = express.Router();
 
 // GET /api/places/nearby?category=&lat=&lng=&radius=
 router.get('/nearby', getNearbyPlaces);
+
+// GET /api/places/ip-location
+router.get('/ip-location', getIpLocation);
 
 // GET /api/places/reverse?lat=&lng=
 router.get('/reverse', reverseGeocodeLocation);
