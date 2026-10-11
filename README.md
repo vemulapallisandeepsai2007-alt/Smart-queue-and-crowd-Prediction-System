@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Smart Queue & Crowd Prediction System (Q-Flow)
 
 A full-stack MERN application for intelligent digital queue reservation, live token dispatch, and real-time crowd telemetry across **Hospitals** and **Banks**. Features sub-second **Socket.IO** synchronization, **historical same-weekday regression for crowd forecasting**, and **automated overcrowding alert detection**.
@@ -211,3 +212,6 @@ Follow this script to deliver an impressive live demonstration of all core syste
 - **Credential Protection**: Mongoose models enforce schema-level `toJSON` methods that unconditionally strip `passwordHash` before any JSON serialization.
 - **Strict Role-Based Access Control**: Middleware verifies JWT signatures and enforces role authorization (`admin`, `staff`, `user`) with 403 Forbidden enforcement on unassigned departments.
 - **Fail-Safe Overpass Gateway**: External OpenStreetMap queries are wrapped in an `AbortController` 4-second timeout, ensuring external network latency never blocks local booking availability.
+=======
+# Smart-queue---crowd-Prediction-System
+>>>>>>> 3bb2b31f24c45491a49edec8a256be3f63fb0034

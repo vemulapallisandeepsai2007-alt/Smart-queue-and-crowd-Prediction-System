@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Navbar from '../../components/Navbar';
+import LiveTime from '../../components/LiveTime';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import { getSocket } from '../../services/socket';
@@ -54,6 +55,7 @@ const StaffDashboard = () => {
   const [currentBreak, setCurrentBreak] = useState(null);
   const [nowServing, setNowServing] = useState(null);
   const [isPaused, setIsPaused] = useState(false);
+  const [serverNow, setServerNow] = useState(null);
   const [loadingTokens, setLoadingTokens] = useState(false);
   const [refreshingTokens, setRefreshingTokens] = useState(false);
 
@@ -131,6 +133,7 @@ const StaffDashboard = () => {
           setCurrentBreak(res.data.currentBreak || null);
           setNowServing(res.data.nowServingToken || null);
           setIsPaused(Boolean(res.data.isPaused));
+          if (res.data.serverNow) setServerNow(res.data.serverNow);
         }
       } catch (err) {
         console.error('Failed to load tokens for department:', err);
@@ -149,6 +152,17 @@ const StaffDashboard = () => {
     }
   }, [selectedDept, fetchDeptTokens]);
 
+  // Tab visibility change: re-fetch when tab becomes visible again
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && selectedDept) {
+        fetchDeptTokens(true);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [fetchDeptTokens, selectedDept]);
+
   // 3. Socket.IO Real-time Synchronization
   useEffect(() => {
     if (!selectedDept?._id) return;
@@ -162,11 +176,13 @@ const StaffDashboard = () => {
     const handleDisconnect = () => setSocketConnected(false);
 
     // Single token update (walkin, booked, completed, skipped, cancelled, recalled)
-    const handleTokenUpdated = ({ departmentId, date, token }) => {
+    const handleTokenUpdated = ({ departmentId, date, token, serverNow: sNow }) => {
       if (departmentId?.toString() === selectedDept._id.toString() && date === todayStr) {
+        if (sNow || token?.serverNow) setServerNow(sNow || token.serverNow);
         setAllTokens((prev) =>
           prev.map((t) => (t._id === token._id ? { ...t, ...token } : t))
         );
+        setTokenModalData((prev) => (prev && prev._id === token._id ? { ...prev, ...token } : prev));
       }
     };
 
@@ -177,11 +193,18 @@ const StaffDashboard = () => {
       tokens: updatedTokens,
       nowServingToken: srvServing,
       isPaused: srvPaused,
+      serverNow: sNow,
     }) => {
       if (departmentId?.toString() === selectedDept._id.toString() && date === todayStr) {
         setAllTokens(updatedTokens);
+        if (sNow) setServerNow(sNow);
         if (srvServing !== undefined) setNowServing(srvServing);
         if (srvPaused !== undefined) setIsPaused(Boolean(srvPaused));
+        setTokenModalData((prev) => {
+          if (!prev) return null;
+          const match = updatedTokens.find((t) => t._id === prev._id);
+          return match ? { ...prev, ...match } : prev;
+        });
       }
     };
 
@@ -1147,24 +1170,27 @@ const StaffDashboard = () => {
                         </div>
                       )}
 
-                      {/* Estimated Time */}
-                      <div className="mt-1.5 space-y-0.5">
-                        <div
-                          className={`text-[11px] font-mono leading-tight ${
+                      {/* Estimated Time & Countdown */}
+                      <div className="mt-1.5 w-full">
+                        <LiveTime
+                          estimatedTime={t.estimatedTime}
+                          serverNow={serverNow}
+                          status={t.status}
+                          peopleAhead={t.peopleAhead}
+                          currentBreak={currentBreak}
+                          isSlotEnded={slotSummaries.find((s) => s.name === t.slot)?.isEnded}
+                          isNowServing={nowServing === t.number}
+                          layout="stacked"
+                          clockClassName={`text-[11px] font-mono leading-tight font-bold ${
                             isBooked
-                              ? 'text-blue-900 font-semibold'
+                              ? 'text-blue-900'
                               : isSkipped
-                              ? 'text-amber-950 font-semibold'
+                              ? 'text-amber-950'
                               : isCompleted || isCancelled
                               ? 'text-white/90'
                               : 'text-slate-600'
                           }`}
-                        >
-                          {t.estimatedClockTime || '~10:00 AM'}
-                        </div>
-
-                        <div
-                          className={`text-[10px] ${
+                          countdownClassName={`text-[10px] leading-tight opacity-90 truncate max-w-full ${
                             isBooked
                               ? 'text-blue-800'
                               : isSkipped
@@ -1173,17 +1199,7 @@ const StaffDashboard = () => {
                               ? 'text-white/80'
                               : 'text-slate-400'
                           }`}
-                        >
-                          {t.mayOverflow ? (
-                            <span className="text-amber-900 font-bold bg-amber-200 px-1 rounded text-[8px]">
-                              May overflow
-                            </span>
-                          ) : t.peopleAhead !== undefined ? (
-                            `${t.peopleAhead} ahead`
-                          ) : (
-                            '0 ahead'
-                          )}
-                        </div>
+                        />
                       </div>
 
                       {/* Status Label */}
@@ -1477,9 +1493,20 @@ const StaffDashboard = () => {
 
                   <div>
                     <span className="text-slate-500 block text-[11px] mb-0.5 font-medium">Estimated Time:</span>
-                    <span className="font-bold text-[#8164AD]">
-                      {tokenModalData.estimatedTime || tokenModalData.estimatedClockTime || '~10:00 AM'}
-                    </span>
+                    <div className="font-bold text-[#8164AD]">
+                      <LiveTime
+                        estimatedTime={tokenModalData.estimatedTime}
+                        serverNow={serverNow}
+                        status={tokenModalData.status}
+                        peopleAhead={tokenModalData.peopleAhead}
+                        currentBreak={currentBreak}
+                        isSlotEnded={slotSummaries.find((s) => s.name === (tokenModalData.slot || selectedSlot))?.isEnded}
+                        isNowServing={nowServing === tokenModalData.number}
+                        layout="inline"
+                        clockClassName="font-bold text-[#8164AD]"
+                        countdownClassName="text-xs font-semibold text-slate-600"
+                      />
+                    </div>
                   </div>
 
                   <div>

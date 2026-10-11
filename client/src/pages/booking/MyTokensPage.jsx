@@ -3,7 +3,10 @@ import { useNavigate, Link } from 'react-router-dom';
 import Navbar from '../../components/Navbar';
 import Breadcrumbs from '../../components/Breadcrumbs';
 import ConfirmModal from '../../components/ConfirmModal';
+import LiveTime from '../../components/LiveTime';
+import useLiveEstimate from '../../hooks/useLiveEstimate';
 import api from '../../services/api';
+import { getSocket } from '../../services/socket';
 import {
   Ticket,
   Calendar,
@@ -18,9 +21,72 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
+const MyTokenLiveCard = ({ token, serverNow }) => {
+  const nowServingNum = token?.department?.nowServingToken;
+  const { clockLabel, countdown, isSpecialState } = useLiveEstimate({
+    estimatedTime: token?.estimatedTime,
+    serverNow,
+    status: token?.status || 'booked',
+    peopleAhead: token?.peopleAhead ?? 0,
+    isNowServing: nowServingNum === token?.number,
+  });
+
+  if (!token) return null;
+
+  const displayTime = isSpecialState
+    ? countdown
+    : `Your turn ${countdown} (${token.estimatedLabel || clockLabel.replace('~', '')})`;
+
+  return (
+    <div
+      id="my-tokens-prominent-live-card"
+      className="p-5 rounded-3xl bg-gradient-to-r from-[#6A4C97] via-[#8164AD] to-[#A084CA] text-white shadow-xl shadow-[#8164AD]/25 border border-purple-300/40 animate-fade-in mb-6"
+    >
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center space-x-4">
+          <div className="w-14 h-14 rounded-2xl bg-white/20 backdrop-blur-md border border-white/30 flex flex-col items-center justify-center shadow-inner shrink-0">
+            <span className="text-[10px] font-extrabold uppercase tracking-widest text-purple-100">TOKEN</span>
+            <span className="text-2xl font-black text-white leading-none">#{token.number}</span>
+          </div>
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black uppercase tracking-wider shadow">
+                YOUR TURN
+              </span>
+              <span className="text-xs text-purple-100 font-medium">
+                {token.department?.place?.name || 'Facility'} &bull; {token.department?.name || 'Department'} &bull; {token.slot}
+              </span>
+            </div>
+            <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+              <span>{displayTime}</span>
+            </h3>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4 bg-white/10 backdrop-blur-md rounded-2xl p-3 sm:px-5 border border-white/20 text-xs shrink-0">
+          <div className="text-left">
+            <span className="text-[10px] uppercase font-bold text-purple-200 block">Queue Ahead</span>
+            <span className="text-sm font-extrabold text-white">
+              {token.peopleAhead === 0 ? "You're next!" : `${token.peopleAhead} citizen(s) ahead`}
+            </span>
+          </div>
+          <div className="w-px h-8 bg-white/20"></div>
+          <div className="text-left">
+            <span className="text-[10px] uppercase font-bold text-purple-200 block">Now Serving</span>
+            <span className="text-sm font-extrabold text-emerald-300">
+              {nowServingNum ? `#${nowServingNum}` : '—'}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const MyTokensPage = () => {
   const navigate = useNavigate();
   const [tokens, setTokens] = useState([]);
+  const [serverNow, setServerNow] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -36,6 +102,7 @@ const MyTokensPage = () => {
       const res = await api.get('/my/tokens');
       if (res.data?.success) {
         setTokens(res.data.tokens || []);
+        if (res.data.serverNow) setServerNow(res.data.serverNow);
       }
     } catch (err) {
       console.error('Failed to load user tokens:', err);
@@ -49,6 +116,68 @@ const MyTokensPage = () => {
   useEffect(() => {
     fetchMyTokens();
   }, [fetchMyTokens]);
+
+  // Tab visibility change: re-fetch when tab becomes visible again
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        fetchMyTokens(true);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [fetchMyTokens]);
+
+  const activeTokens = tokens.filter((t) => t.status === 'booked');
+  const pastTokens = tokens.filter((t) => t.status !== 'booked');
+
+  // Socket.IO real-time update listeners for active tokens
+  useEffect(() => {
+    if (activeTokens.length === 0) return;
+    const socket = getSocket();
+    const joinedRooms = [];
+
+    activeTokens.forEach((t) => {
+      const dId = t.department?._id || t.department;
+      if (dId && t.date) {
+        socket.emit('join:department', { departmentId: dId, date: t.date });
+        joinedRooms.push({ departmentId: dId, date: t.date });
+      }
+    });
+
+    const handleTokenUpdated = ({ departmentId, date, token: updatedToken, serverNow: sNow }) => {
+      if (sNow) setServerNow(sNow);
+      setTokens((prev) =>
+        prev.map((t) => (t._id === updatedToken._id ? { ...t, ...updatedToken } : t))
+      );
+    };
+
+    const handleBatchTokens = ({ departmentId, date, tokens: batchTokens, nowServingToken, serverNow: sNow }) => {
+      if (sNow) setServerNow(sNow);
+      setTokens((prev) =>
+        prev.map((t) => {
+          const match = batchTokens.find((b) => b._id === t._id);
+          if (match) {
+            const updated = { ...t, ...match };
+            if (nowServingToken && t.department) {
+              updated.department = { ...t.department, nowServingToken };
+            }
+            return updated;
+          }
+          return t;
+        })
+      );
+    };
+
+    socket.on('token:updated', handleTokenUpdated);
+    socket.on('tokens:batch', handleBatchTokens);
+
+    return () => {
+      joinedRooms.forEach((r) => socket.emit('leave:department', r));
+      socket.off('token:updated', handleTokenUpdated);
+      socket.off('tokens:batch', handleBatchTokens);
+    };
+  }, [tokens.map((t) => `${t._id}_${t.status}`).join(',')]);
 
   const handleConfirmCancel = async () => {
     if (!tokenToCancel) return;
@@ -69,9 +198,6 @@ const MyTokensPage = () => {
       setCancelLoading(false);
     }
   };
-
-  const activeTokens = tokens.filter((t) => t.status === 'booked');
-  const pastTokens = tokens.filter((t) => t.status !== 'booked');
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#fcfaff] via-[#f4ecfb] to-[#e9ddf6] text-slate-800 flex flex-col selection:bg-[#B19BD6] selection:text-white">
@@ -156,6 +282,11 @@ const MyTokensPage = () => {
                   </span>
                 </div>
 
+                {/* Prominent Live Card for User's Active Token */}
+                {activeTokens.length > 0 && (
+                  <MyTokenLiveCard token={activeTokens[0]} serverNow={serverNow} />
+                )}
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {activeTokens.map((token) => (
                     <div
@@ -208,9 +339,17 @@ const MyTokensPage = () => {
                               <Clock className="w-3.5 h-3.5 text-[#8164AD]" />
                               <span>Estimated Time</span>
                             </span>
-                            <p className="font-bold text-[#8164AD] text-sm">
-                              {token.estimatedClockTime || '~10:30 AM'}
-                            </p>
+                            <div className="font-bold text-[#8164AD] text-sm">
+                              <LiveTime
+                                estimatedTime={token.estimatedTime}
+                                serverNow={serverNow}
+                                status={token.status}
+                                peopleAhead={token.peopleAhead ?? 0}
+                                layout="inline"
+                                clockClassName="font-bold text-[#8164AD] text-sm"
+                                countdownClassName="text-xs text-[#6A4C97] font-semibold ml-1"
+                              />
+                            </div>
                           </div>
                         </div>
 

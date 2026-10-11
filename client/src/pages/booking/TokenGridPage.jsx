@@ -29,11 +29,70 @@ import {
   Sunset,
   Moon,
   ChevronRight,
-  Info,
-  Loader2,
   Check,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+
+const UserOwnTokenCard = ({ token, serverNow, currentBreak, isSlotEnded, nowServing }) => {
+  const { clockLabel, countdown, isSpecialState } = useLiveEstimate({
+    estimatedTime: token?.estimatedTime,
+    serverNow,
+    status: token?.status || 'booked',
+    peopleAhead: token?.peopleAhead ?? 0,
+    currentBreak,
+    isSlotEnded,
+    isNowServing: nowServing === token?.number,
+  });
+
+  if (!token) return null;
+
+  const displayTime = isSpecialState
+    ? countdown
+    : `Your turn ${countdown} (${token.estimatedLabel || clockLabel.replace('~', '')})`;
+
+  return (
+    <div
+      id="user-own-token-live-card"
+      className="p-5 rounded-3xl bg-gradient-to-r from-[#6A4C97] via-[#8164AD] to-[#A084CA] text-white shadow-xl shadow-[#8164AD]/25 border border-purple-300/40 animate-fade-in mb-6"
+    >
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center space-x-4">
+          <div className="w-14 h-14 rounded-2xl bg-white/20 backdrop-blur-md border border-white/30 flex flex-col items-center justify-center shadow-inner shrink-0">
+            <span className="text-[10px] font-extrabold uppercase tracking-widest text-purple-100">TOKEN</span>
+            <span className="text-2xl font-black text-white leading-none">#{token.number}</span>
+          </div>
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-black uppercase tracking-wider shadow">
+                YOUR ACTIVE TOKEN
+              </span>
+              <span className="text-xs text-purple-100 font-medium">Slot: {token.slot}</span>
+            </div>
+            <h4 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+              <span>{displayTime}</span>
+            </h4>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4 bg-white/10 backdrop-blur-md rounded-2xl p-3 sm:px-5 border border-white/20 text-xs shrink-0">
+          <div className="text-left">
+            <span className="text-[10px] uppercase font-bold text-purple-200 block">Queue Ahead</span>
+            <span className="text-sm font-extrabold text-white">
+              {token.peopleAhead === 0 ? "You're next!" : `${token.peopleAhead} citizen(s) ahead`}
+            </span>
+          </div>
+          <div className="w-px h-8 bg-white/20"></div>
+          <div className="text-left">
+            <span className="text-[10px] uppercase font-bold text-purple-200 block">Now Serving</span>
+            <span className="text-sm font-extrabold text-emerald-300">
+              {nowServing ? `#${nowServing}` : 'None'}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const TokenGridPage = () => {
   const { deptId } = useParams();
@@ -820,6 +879,25 @@ const TokenGridPage = () => {
         {/* 4. 25-TOKEN GRID FOR SELECTED SLOT */}
         {/* ========================================================= */}
         <div className="space-y-4">
+          {/* Prominent Live Card for User's Own Booked Token */}
+          {userHasActiveToken && (
+            (() => {
+              const myToken = allTokens.find(
+                (t) => (t.isMyToken || t.number === userActiveTokenNumber) && t.status === 'booked'
+              );
+              if (!myToken) return null;
+              return (
+                <UserOwnTokenCard
+                  token={myToken}
+                  serverNow={serverNow}
+                  currentBreak={currentBreak}
+                  isSlotEnded={slotSummaries.find((s) => s.name === myToken.slot)?.isEnded}
+                  nowServing={nowServing}
+                />
+              );
+            })()
+          )}
+
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
               <span>{selectedSlot} Slot Grid</span>
@@ -913,10 +991,19 @@ const TokenGridPage = () => {
                       #{token.number}
                     </span>
 
-                    {/* Small Clock Time */}
-                    <div className="text-[10px] font-bold leading-tight truncate max-w-full">
-                      {token.estimatedClockTime}
-                    </div>
+                    {/* Small Clock Time & Live Countdown */}
+                    <LiveTime
+                      estimatedTime={token.estimatedTime}
+                      serverNow={serverNow}
+                      status={token.status}
+                      peopleAhead={token.peopleAhead}
+                      currentBreak={currentBreak}
+                      isSlotEnded={slotSummaries.find((s) => s.name === token.slot)?.isEnded}
+                      isNowServing={isServingNow}
+                      layout="stacked"
+                      clockClassName="text-[10px] font-bold leading-tight truncate max-w-full"
+                      countdownClassName="text-[9px] font-medium leading-none opacity-90 truncate max-w-full"
+                    />
 
                     {/* Queue Position and Overflow Indicator */}
                     <div className="text-[9px] font-medium leading-none opacity-90 flex items-center gap-1">
@@ -956,7 +1043,19 @@ const TokenGridPage = () => {
             { label: 'Date', value: selectedDate },
             {
               label: 'Estimated Clock Time',
-              value: selectedTokenForBooking?.estimatedClockTime || '~10:00 AM',
+              value: (
+                <LiveTime
+                  estimatedTime={selectedTokenForBooking?.estimatedTime}
+                  serverNow={serverNow}
+                  status="available"
+                  peopleAhead={selectedTokenForBooking?.peopleAhead || 0}
+                  currentBreak={currentBreak}
+                  isSlotEnded={slotSummaries.find((s) => s.name === (selectedTokenForBooking?.slot || selectedSlot))?.isEnded}
+                  layout="inline"
+                  clockClassName="font-bold text-slate-800"
+                  countdownClassName="text-xs text-[#8164AD] font-semibold"
+                />
+              ),
             },
             {
               label: 'Queue Ahead (This Slot)',
