@@ -28,18 +28,38 @@ const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
 // Security Headers
 app.use(helmet());
 
-// CORS Configuration - allows CLIENT_URL, all localhost/127.0.0.1 ports, and local dev network
+// CORS Configuration - allows CLIENT_URL, Vercel deployments, all localhost ports, and local dev network
 const isOriginAllowed = (origin) => {
   if (!origin) return true; // allow curl, Postman, server-to-server, mobile apps
-  if (origin === CLIENT_URL || origin === 'http://localhost:5173' || origin === 'http://127.0.0.1:5173') {
+
+  const normalizedOrigin = origin.replace(/\/+$/, '');
+
+  // Split and test comma-separated CLIENT_URL if provided
+  const configuredUrls = (process.env.CLIENT_URL || '')
+    .split(',')
+    .map((u) => u.trim().replace(/\/+$/, ''))
+    .filter(Boolean);
+
+  if (configuredUrls.includes(normalizedOrigin)) {
     return true;
   }
+
+  // Allow all Vercel deployments (*.vercel.app) or localhost
+  if (
+    normalizedOrigin === 'https://smartqueueflow.vercel.app' ||
+    /^https:\/\/[a-zA-Z0-9_-]+\.vercel\.app$/.test(normalizedOrigin) ||
+    normalizedOrigin === 'http://localhost:5173' ||
+    normalizedOrigin === 'http://127.0.0.1:5173'
+  ) {
+    return true;
+  }
+
   // Allow any localhost or 127.0.0.1 port (e.g., 5173, 5174, 5175, 3000)
-  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(normalizedOrigin)) {
     return true;
   }
   // Allow local network IP addresses for local devices (e.g., 192.168.x.x, 10.x.x.x)
-  if (/^https?:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/.test(origin)) {
+  if (/^https?:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/.test(normalizedOrigin)) {
     return true;
   }
   return false;
